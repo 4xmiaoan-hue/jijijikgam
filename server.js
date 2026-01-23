@@ -4,12 +4,16 @@ import cors from 'cors'
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
 import path from 'path'
-import crypto from 'crypto'
 import fs from 'fs'
 import KoreanLunarCalendar from 'korean-lunar-calendar'
+import * as PortOne from "@portone/server-sdk"
 
 const envPath = path.resolve(process.cwd(), '.env.local')
 dotenv.config({ path: envPath })
+
+const portone = PortOne.PortOneClient({
+  secret: process.env.PORTONE_V2_API_SECRET || process.env.PORTONE_API_SECRET || ''
+});
 
 // Load Contract
 let contract = {};
@@ -603,18 +607,14 @@ app.post('/api/payment/complete', async (req, res) => {
     const { paymentId, orderId } = req.body || {}
     if (!paymentId || !orderId) return res.status(400).json({ error: 'Missing paymentId/orderId' })
 
-    const PORTONE_API_SECRET = process.env.PORTONE_V2_API_SECRET || ''
-    if (!PORTONE_API_SECRET) return res.status(500).json({ error: 'Missing PORTONE_V2_API_SECRET' })
-
-    const payResp = await fetch(`https://api.portone.io/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `PortOne ${PORTONE_API_SECRET}`, Tier: process.env.PORTONE_TIER_CODE || 'JJJ' }
-    })
-    if (!payResp.ok) {
-      const msg = await payResp.text()
-      return res.status(502).json({ error: `PortOne query failed`, detail: msg })
+    // 1. 포트원 결제내역 단건조회 (SDK 사용)
+    const payment = await portone.payment.getPayment({ paymentId });
+    
+    if (!payment) {
+      return res.status(404).json({ error: 'Payment not found in PortOne' })
     }
-    const payment = await payResp.json()
 
+    // 2. DB 주문 데이터 조회
     const { data: orderRow, error: orderFetchError } = await supabase
       .from('orders')
       .select('*')
@@ -622,31 +622,37 @@ app.post('/api/payment/complete', async (req, res) => {
       .single()
     if (orderFetchError || !orderRow) return res.status(404).json({ error: 'Order not found' })
 
-    const paidTotal = payment?.amount?.total
+    // 3. 금액 검증
+    const paidTotal = payment.amount.total
     const intended = orderRow.amount
     if (Number(paidTotal) !== Number(intended)) {
       return res.status(400).json({ error: 'Amount mismatch' })
     }
 
+    // 4. 상태 매핑
     let statusUpdate = 'pending'
-    if (payment?.status === 'PAID') statusUpdate = 'paid'
-    else if (payment?.status === 'VIRTUAL_ACCOUNT_ISSUED') statusUpdate = 'va_issued'
-    else if (payment?.status === 'PARTIALLY_PAID') statusUpdate = 'partially_paid'
-    else statusUpdate = 'paid'
+    const status = payment.status;
+    
+    if (status === 'PAID') statusUpdate = 'paid'
+    else if (status === 'VIRTUAL_ACCOUNT_ISSUED') statusUpdate = 'va_issued'
+    else if (status === 'PARTIALLY_PAID') statusUpdate = 'partially_paid'
+    else statusUpdate = 'paid' // 기본값
 
+    // 5. DB 업데이트
     const { error: updError } = await supabase
       .from('orders')
       .update({ status: statusUpdate, pg_tid: paymentId, updated_at: new Date().toISOString() })
       .eq('id', orderId)
     if (updError) return res.status(500).json({ error: 'Update failed' })
 
-    // Trigger report generation in background if paid
+    // 6. 결제 완료 시 리포트 생성 트리거
     if (statusUpdate === 'paid') {
       generateReportInBackground(orderId);
     }
 
     return res.status(200).json({ status: statusUpdate.toUpperCase(), order_token: orderRow.order_token })
-  } catch {
+  } catch (e) {
+    console.error('[Payment Complete] Error:', e);
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -792,67 +798,100 @@ app.all('/api/payment/confirm', async (req, res) => {
     res.status(200).send('OK')
   }
 })
-function verifySignature(rawBody, headers, secret) {
-  const sig = headers['x-portone-signature'] || headers['x-portone-signature-v2']
-  if (!sig || !secret) return false
-  const hmac = crypto.createHmac('sha256', secret)
-  hmac.update(rawBody)
-  const hex = hmac.digest('hex')
-  const base64 = Buffer.from(hex, 'hex').toString('base64')
-  return sig === hex || sig === base64
-}
-
-app.post('/api/portone/webhook', async (req, res) => {
+app.post('/api/portone/webhook', async (req, res, next) => {
   try {
-    const raw = req.body
-    const secret = process.env.PORTONE_WEBHOOK_SECRET || process.env.PORTONE_V2_WEBHOOK_SECRET || ''
-    const ok = verifySignature(raw, req.headers, secret)
-    if (!ok) return res.status(400).end()
-    const event = JSON.parse(raw)
-    const type = event?.type
-    const paymentId = event?.data?.paymentId
-    if (!paymentId) return res.status(200).end()
+    const webhookSecret = process.env.PORTONE_WEBHOOK_SECRET || process.env.PORTONE_V2_WEBHOOK_SECRET || '';
+    
+    try {
+      // 1. 웹훅 메시지 검증
+      const webhook = await PortOne.Webhook.verify(
+        webhookSecret,
+        req.body,
+        req.headers,
+      );
 
-    const PORTONE_API_SECRET = process.env.PORTONE_V2_API_SECRET || ''
-    if (!PORTONE_API_SECRET) return res.status(500).json({ error: 'Missing PORTONE_V2_API_SECRET' })
+      // 2. 결제 관련 정보일 경우만 처리
+      if (webhook.data && "paymentId" in webhook.data) {
+        const { paymentId } = webhook.data;
 
-    const payResp = await fetch(`https://api.portone.io/payments/${encodeURIComponent(paymentId)}`, {
-      headers: { Authorization: `PortOne ${PORTONE_API_SECRET}`, Tier: process.env.PORTONE_TIER_CODE || 'JJJ' }
-    })
-    if (!payResp.ok) return res.status(200).end()
-    const payment = await payResp.json()
+        // 3. 포트원 결제내역 단건조회
+        const payment = await portone.payment.getPayment({ paymentId });
 
-    const { data: orderRow } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('id', paymentId)
-      .single()
+        if (!payment) {
+          return res.status(200).end();
+        }
 
-    if (orderRow) {
-      const intended = orderRow.amount
-      const paidTotal = payment?.amount?.total
-      if (Number(paidTotal) === Number(intended)) {
-        let statusUpdate = 'pending'
-        if (payment?.status === 'PAID') statusUpdate = 'paid'
-        else if (payment?.status === 'VIRTUAL_ACCOUNT_ISSUED') statusUpdate = 'va_issued'
-        else if (payment?.status === 'PARTIALLY_PAID') statusUpdate = 'partially_paid'
-        const { error: updError } = await supabase
+        const { id, status, amount: paymentAmount } = payment;
+
+        // 4. DB 주문 데이터 조회 및 검증
+        const { data: orderRow, error: orderFetchError } = await supabase
           .from('orders')
-          .update({ status: statusUpdate, pg_tid: paymentId, updated_at: new Date().toISOString() })
-          .eq('id', paymentId)
-        if (updError) console.error('Webhook update error', updError)
+          .select('*')
+          .eq('id', id) // paymentId가 order.id와 동일하다고 가정
+          .single();
 
-        // Trigger report generation in background if paid
-        if (statusUpdate === 'paid') {
-          generateReportInBackground(orderRow.id);
+        if (orderFetchError || !orderRow) {
+          console.error(`[Webhook] Order not found for paymentId: ${id}`);
+          return res.status(200).end();
+        }
+
+        // 5. 금액 검증
+        if (Number(paymentAmount.total) === Number(orderRow.amount)) {
+          let statusUpdate = 'pending';
+          
+          switch (status) {
+            case "PAID":
+              statusUpdate = 'paid';
+              break;
+            case "VIRTUAL_ACCOUNT_ISSUED":
+              statusUpdate = 'va_issued';
+              break;
+            case "PARTIALLY_PAID":
+              statusUpdate = 'partially_paid';
+              break;
+            case "CANCELLED":
+            case "FAILED":
+              statusUpdate = 'failed';
+              break;
+            default:
+              statusUpdate = 'pending';
+          }
+
+          // 6. 주문 상태 업데이트
+          const { error: updError } = await supabase
+            .from('orders')
+            .update({ 
+              status: statusUpdate, 
+              pg_tid: id, 
+              updated_at: new Date().toISOString() 
+            })
+            .eq('id', id);
+
+          if (updError) {
+            console.error('[Webhook] DB update error:', updError);
+          }
+
+          // 7. 결제 완료 시 리포트 생성 트리거
+          if (statusUpdate === 'paid') {
+            generateReportInBackground(orderRow.id);
+          }
+        } else {
+          console.warn(`[Webhook] Amount mismatch for paymentId: ${id}. Expected ${orderRow.amount}, got ${paymentAmount.total}`);
         }
       }
+    } catch (e) {
+      if (e instanceof PortOne.Webhook.WebhookVerificationError) {
+        console.error('[Webhook] Verification failed:', e.message);
+        return res.status(400).end();
+      }
+      throw e;
     }
-    return res.status(200).end()
+    res.status(200).end();
   } catch (e) {
-    return res.status(500).json({ error: 'Internal server error' })
+    console.error('[Webhook] Error:', e);
+    next(e);
   }
-})
+});
 
 app.get('/api/health', (req, res) => res.status(200).json({ ok: true }))
 

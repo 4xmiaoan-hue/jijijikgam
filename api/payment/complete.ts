@@ -96,9 +96,10 @@ export default async function handler(req: any, res: any) {
             purchase_count_or_session_counter: (purchaseCount || 0) + 1,
             date_yyyy_mm_dd: new Date().toISOString().split('T')[0],
             saju_result: {
-                day_pillar: sajuResult.ilju,
-                month_branch: sajuResult.month_branch,
-                hour_branch: sajuResult.hour_branch,
+                year_pillar: sajuResult.year_pillar,
+                month_pillar: sajuResult.month_pillar,
+                day_pillar: sajuResult.day_pillar,
+                hour_pillar: sajuResult.hour_pillar,
                 gender: 'unknown',
                 lunar_solar: profile.solar_lunar,
                 leap_month: false,

@@ -146,9 +146,10 @@ export default async function handler(req: any, res: any) {
             purchase_count_or_session_counter: (purchaseCount || 0) + 1,
             date_yyyy_mm_dd: new Date().toISOString().split('T')[0],
             saju_result: {
-                day_pillar: sajuResult.ilju,
-                month_branch: sajuResult.month_branch,
-                hour_branch: sajuResult.hour_branch,
+                year_pillar: sajuResult.year_pillar,
+                month_pillar: sajuResult.month_pillar,
+                day_pillar: sajuResult.day_pillar,
+                hour_pillar: sajuResult.hour_pillar,
                 gender: 'unknown',
                 lunar_solar: profile.solar_lunar,
                 leap_month: false,
@@ -159,48 +160,85 @@ export default async function handler(req: any, res: any) {
             saju_traits: sajuTraits
         };
 
-        const { final_prompt, selected_levers, seed_hash } = await builder.build(builderInput);
+        // --- NEW: Sequential Generation Logic ---
+        
+        // 1. Select Levers (Once for the whole report)
+        const selectedLevers = builder.selectLevers(builderInput);
+        const sections = builder.getExtendedSections();
+        
+        console.log(`[Report Generation] Starting sequential generation for ${sections.length} sections...`);
 
-        // 4. Call OpenAI
-        let reportContent = '';
-        let openingSentence = '';
-        let closingSentence = '';
+        let fullReportContent = '';
+        let generatedPromptsLog: string[] = [];
 
         if (!OPENAI_API_KEY) {
-            reportContent = 'Error: Missing API Key';
+            fullReportContent = 'Error: Missing API Key';
         } else {
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${OPENAI_API_KEY}`
-                },
-                body: JSON.stringify({
-                    model: 'gpt-4o', // Updated to gpt-4o
-                    messages: [
-                        { role: 'system', content: final_prompt },
-                        { role: 'user', content: `${profile.name}님의 리포트를 작성해줘.` }
-                    ],
-                    temperature: 0.7
-                })
-            });
+            const callOpenAI = async (prompt: string, temp: number, retryCount = 0): Promise<any> => {
+                try {
+                    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${OPENAI_API_KEY}`
+                        },
+                        body: JSON.stringify({
+                            model: 'gpt-4o',
+                            messages: [
+                                { role: 'system', content: prompt },
+                                { role: 'user', content: `[Section Task] Write this section now.` }
+                            ],
+                            temperature: temp
+                        })
+                    });
+                    
+                    if (!response.ok) {
+                        const errBody = await response.json().catch(() => ({}));
+                        console.error('OpenAI Error:', errBody);
+                        throw new Error('AI Error');
+                    }
+                    return await response.json();
+                } catch (e) {
+                    if (retryCount < 2) {
+                        return callOpenAI(prompt, temp, retryCount + 1);
+                    }
+                    throw e;
+                }
+            };
 
-            if (!response.ok) {
-                const errBody = await response.json();
-                console.error('OpenAI Error:', errBody);
-                reportContent = 'AI Error';
-            } else {
-                const aiResult = await response.json();
-                reportContent = aiResult.choices[0].message.content;
-                
-                // Parse Opening/Closing for History
-                // Simple heuristic: First paragraph = Opening, Last paragraph = Closing
-                // Or First line / Last line
-                const lines = reportContent.split('\n').filter(l => l.trim().length > 0);
-                if (lines.length > 0) openingSentence = lines[0];
-                if (lines.length > 1) closingSentence = lines[lines.length - 1];
+            // Loop through sections
+            for (const section of sections) {
+                const sectionPrompt = builder.buildSectionPrompt(
+                    builderInput, 
+                    selectedLevers, 
+                    section, 
+                    fullReportContent
+                );
+
+                generatedPromptsLog.push(sectionPrompt);
+
+                try {
+                    const aiResult = await callOpenAI(sectionPrompt, 0.75);
+                    let sectionContent = aiResult.choices[0].message.content;
+
+                    if (sectionContent.length < section.min_chars * 0.7) {
+                         const expansionPrompt = sectionPrompt + `\n\n[SYSTEM ALERT] Your output was too short. Please REWRITE this section to be much more detailed.`;
+                         const retryResult = await callOpenAI(expansionPrompt, 0.85);
+                         sectionContent = retryResult.choices[0].message.content;
+                    }
+
+                    fullReportContent += `\n\n${sectionContent}\n\n`;
+                } catch (e) {
+                    console.error(`[Report Generation] Failed at Section ${section.id}`, e);
+                    fullReportContent += `\n\n[Section ${section.id} Error: AI generation failed.]\n\n`;
+                }
             }
         }
+
+        // --- Post-Processing ---
+        const lines = fullReportContent.split('\n').filter(l => l.trim().length > 0);
+        const openingSentence = lines[0] || "";
+        const closingSentence = lines[lines.length - 1] || "";
 
         // 5. Save Report
         await supabase
@@ -208,22 +246,21 @@ export default async function handler(req: any, res: any) {
             .insert({
                 order_id: order.id,
                 order_token: order.order_token,
-                content: reportContent,
-                template_version: 'v3-7sections-2000chars'
+                content: fullReportContent,
+                template_version: 'v5-extended-20k-sequential'
             });
 
-        // 6. Save Prompt History (Async, don't block response?)
-        // Better to await to ensure data integrity
+        // 6. Save Prompt History
         await supabase
             .from('prompt_generation_history')
             .insert({
-                user_id: null, // If we have user system later
+                user_id: null,
                 guest_id: profile.id,
                 sage_slug: sageSlug,
                 question_id: product.id,
-                seed_hash: seed_hash,
-                selected_levers_json: selected_levers,
-                opening_sentence: openingSentence.substring(0, 500), // Truncate if too long
+                seed_hash: "",
+                selected_levers_json: selectedLevers,
+                opening_sentence: openingSentence.substring(0, 500),
                 closing_sentence: closingSentence.substring(0, 500)
             });
 

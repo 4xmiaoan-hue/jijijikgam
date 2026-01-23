@@ -145,11 +145,13 @@ Speech_Rules:
         // Context Data
         // Enrich the Saju data with the new payload format
         const enrichedSaju = enrichSajuPayload({
-            year: input.saju_result.year_pillar,
-            month: input.saju_result.month_pillar,
-            day: input.saju_result.day_pillar,
-            hour: input.saju_result.hour_pillar,
-        });
+            ...input.saju_result,
+            solar_date: input.date_yyyy_mm_dd,
+            ilju: input.saju_result.day_pillar,
+            ilju_index: 0, // Placeholder
+            is_leap_month_applied: input.saju_result.leap_month,
+            day_shifted_by_yaja: false, // Placeholder
+        } as any);
 
         const contextData = `
 [USER_CONTEXT]
