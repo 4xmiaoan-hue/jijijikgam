@@ -211,16 +211,14 @@ export default async function handler(req: any, res: any) {
                 }
             };
 
-            // Loop through sections
-            for (const section of sections) {
+            // Loop through sections in parallel to avoid Vercel timeouts
+            const sectionPromises = sections.map(async (section) => {
                 const sectionPrompt = builder.buildSectionPrompt(
                     builderInput, 
                     selectedLevers, 
                     section, 
-                    fullReportContent
+                    "" // We can't easily pass incremental context in parallel, but individual sections are deep enough
                 );
-
-                generatedPromptsLog.push(sectionPrompt);
 
                 try {
                     const aiResult = await callOpenAI(sectionPrompt, 0.75);
@@ -232,12 +230,19 @@ export default async function handler(req: any, res: any) {
                          sectionContent = retryResult.choices[0].message.content;
                     }
 
-                    fullReportContent += `\n\n${sectionContent}\n\n`;
+                    return { id: section.id, content: sectionContent };
                 } catch (e) {
                     console.error(`[Report Generation] Failed at Section ${section.id}`, e);
-                    fullReportContent += `\n\n[Section ${section.id} Error: AI generation failed.]\n\n`;
+                    return { id: section.id, content: `\n\n[Section ${section.id} Error: AI generation failed.]\n\n` };
                 }
-            }
+            });
+
+            const sectionResults = await Promise.all(sectionPromises);
+            // Sort by ID to maintain correct order
+            fullReportContent = sectionResults
+                .sort((a, b) => (Number(a.id) - Number(b.id)))
+                .map(r => r.content)
+                .join('\n\n');
         }
 
         // --- Post-Processing ---
