@@ -28,7 +28,8 @@ function App() {
       <Route path="/report/test" element={<TestOrderReport />} />
       
       {/* Dynamic Report Result */}
-      <Route path="/report/result" element={<ReportResult />} />
+      <Route path="/report/:orderToken" element={<ReportResult />} />
+      <Route path="/report/result" element={<ReportResult />} /> {/* Backward compatibility if needed, but likely broken without params */}
 
       {/* Test Routes for Specific Profiles */}
       <Route path="/report/test/minsu" element={<TestMultiReport />} />

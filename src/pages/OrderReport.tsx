@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Header } from '../components/layout/Header';
 import { Footer } from '../components/layout/Footer';
@@ -8,11 +8,14 @@ import { supabase } from '../lib/supabase';
 import ReactMarkdown from 'react-markdown';
 import ModernLoading from '../components/ModernLoading';
 import WebtoonScrollReport from '../components/report/WebtoonScrollReport';
+import { computeSaju, SajuResult } from '../lib/saju-calculator';
 
 export default function OrderReport() {
     const { token } = useParams<{ token: string }>();
     const navigate = useNavigate();
     const [reportData, setReportData] = useState<any>(null);
+    const [profile, setProfile] = useState<any>(null);
+    const [sajuResult, setSajuResult] = useState<SajuResult | undefined>(undefined);
     const [loading, setLoading] = useState(true);
     const [productName, setProductName] = useState<string>("");
     const [progress, setProgress] = useState(0);
@@ -27,9 +30,17 @@ export default function OrderReport() {
 
             try {
                 // 1. Try to fetch existing report
+                // Join guest_profiles via orders
                 const { data: report, error: reportError } = await supabase
                     .from('reports')
-                    .select('*, orders(*, products(*))')
+                    .select(`
+                        *, 
+                        orders (
+                            *, 
+                            products (*),
+                            guest_profiles (*)
+                        )
+                    `)
                     .eq('order_token', token)
                     .single();
 
@@ -38,6 +49,27 @@ export default function OrderReport() {
                     if (report?.orders?.products?.name) {
                         setProductName(report.orders.products.name);
                     }
+                    
+                    const p = report.orders.guest_profiles;
+                    if (p) {
+                        setProfile(p);
+                        try {
+                             const saju = computeSaju(
+                                p.name,
+                                p.birth_date_iso,
+                                p.solar_lunar === 'lunar' ? 'lunar' : 'solar',
+                                false,
+                                p.birth_time_slot.includes('야자') ? '야자' : 
+                                p.birth_time_slot.includes('조자') ? '조자' : 
+                                p.birth_time_slot.split(' ')[1] || '자', 
+                                p.gender || 'unknown'
+                            );
+                            setSajuResult(saju);
+                        } catch (e) {
+                            console.error("Saju Calc Error", e);
+                        }
+                    }
+
                     setLoading(false);
                     return;
                 }
@@ -135,7 +167,7 @@ export default function OrderReport() {
     const isWebtoonFormat = reportData.content.includes('<SECTION_0>');
 
     if (isWebtoonFormat) {
-        return <WebtoonScrollReport rawText={reportData.content} />;
+        return <WebtoonScrollReport rawText={reportData.content} profile={profile} sajuResult={sajuResult} />;
     }
 
     return (
