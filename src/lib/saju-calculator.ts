@@ -116,6 +116,7 @@ export interface SajuResult {
     month_pillar: string;
     day_pillar: string;
     hour_pillar: string;
+    gender: string;
 }
 
 export function computeSaju(
@@ -213,6 +214,7 @@ export function computeSaju(
         year_pillar: yearPillar,
         month_pillar: monthPillar,
         day_pillar: dayPillar,
-        hour_pillar: hourPillar
+        hour_pillar: hourPillar,
+        gender: gender
     };
 }

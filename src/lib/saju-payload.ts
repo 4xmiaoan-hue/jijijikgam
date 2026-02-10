@@ -1,35 +1,6 @@
 import { SajuResult } from './saju-calculator';
-
-export interface EnrichedSajuPayload {
-    meta: {
-        version: string;
-        generated_at: string;
-    };
-    basic: {
-        year: PillarInfo;
-        month: PillarInfo;
-        day: PillarInfo;
-        hour: PillarInfo;
-    };
-    analysis: {
-        ten_gods_summary: string[];
-        element_balance: string;
-        special_stars: string[]; // sinsal
-        auspicious_stars: string[];
-    };
-}
-
-interface PillarInfo {
-    chun_kr: string;
-    chun_hanja: string;
-    ji_kr: string;
-    ji_hanja: string;
-    ten_god_chun: string; // 십성 (천간)
-    ten_god_ji: string;   // 십성 (지지)
-    woonsung: string;     // 12운성
-    jijangan: string[];   // 지장간
-    sinsal: string[];     // 신살
-}
+import { EnrichedSajuPayload } from './saju-types';
+import { analyzeSaju } from './saju-analyzer';
 
 // Helper to map Korean characters to Hanja
 const STEM_HANJA: Record<string, string> = {
@@ -41,39 +12,21 @@ const BRANCH_HANJA: Record<string, string> = {
 };
 
 export function enrichSajuPayload(saju: SajuResult): EnrichedSajuPayload {
-    const buildPillar = (gan: string, zhi: string): PillarInfo => ({
-        chun_kr: gan,
-        chun_hanja: STEM_HANJA[gan] || gan,
-        ji_kr: zhi,
-        ji_hanja: BRANCH_HANJA[zhi] || zhi,
-        ten_god_chun: "비견",
-        ten_god_ji: "식신",
-        woonsung: "장생",
-        jijangan: ["무", "병", "갑"],
-        sinsal: []
-    });
+    // 1. Perform detailed analysis
+    const enriched = analyzeSaju(saju, saju.gender || 'female');
 
-    const parsePillar = (pillarStr: string) => {
-        if (!pillarStr || pillarStr.length < 2) return buildPillar("?", "?");
-        return buildPillar(pillarStr[0], pillarStr[1]);
+    // 2. Add formatting (Hanja mapping)
+    const mapHanja = (pillar: any) => {
+        if (!pillar) return pillar;
+        pillar.chun_hanja = STEM_HANJA[pillar.chun_kr] || pillar.chun_kr;
+        pillar.ji_hanja = BRANCH_HANJA[pillar.ji_kr] || pillar.ji_kr;
+        return pillar;
     };
 
-    return {
-        meta: {
-            version: "1.0.0",
-            generated_at: new Date().toISOString()
-        },
-        basic: {
-            year: parsePillar(saju.year_pillar),
-            month: parsePillar(saju.month_pillar),
-            day: parsePillar(saju.day_pillar),
-            hour: parsePillar(saju.hour_pillar)
-        },
-        analysis: {
-            ten_gods_summary: ["비견 과다", "식상 발달"],
-            element_balance: "목(3), 화(2), 토(1), 금(1), 수(1)",
-            special_stars: ["역마살", "도화살"],
-            auspicious_stars: ["천을귀인"]
-        }
-    };
+    enriched.basic.year = mapHanja(enriched.basic.year);
+    enriched.basic.month = mapHanja(enriched.basic.month);
+    enriched.basic.day = mapHanja(enriched.basic.day);
+    enriched.basic.hour = mapHanja(enriched.basic.hour);
+
+    return enriched;
 }

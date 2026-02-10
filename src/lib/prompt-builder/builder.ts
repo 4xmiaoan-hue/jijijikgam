@@ -187,17 +187,37 @@ ${previousContext}
 ` : `[START OF REPORT]`;
 
         // Specific Instruction for this section
-        const instruction = `
+        let instruction = `
 [SECTION_INSTRUCTION]
 You are writing Section [${section.id}] "${section.title}" of a long-form Saju report.
 Goal: Write a deep, immersive analysis specifically for this section.
 
 Specific Rules for this Section:
 ${section.instructions.map(r => `- ${r}`).join('\n')}
+`;
 
+        // Inject Saju Logic Instructions
+        if (section.id === 2) {
+            instruction += `
+[SPECIAL_SAJU_INSTRUCTIONS]
+- You MUST analyze the **Ten Gods (Shipseong)** found in the context (ten_god_chun, ten_god_ji). Explain what "BiGyeon", "SikSin", etc., mean for the user's life.
+- Analyze the **12 Woonsung** phases (e.g., JangSaeng, JeWang) and their impact on energy levels.
+- Mention **Sinsal (Special Stars)** like "Yeokma" or "Dohwa" if present in the data.
+- Explain the **Five Elements Balance** (element_balance) and which element is dominant or missing.
+`;
+        } else if (section.id === 3) {
+            instruction += `
+[SPECIAL_SAJU_INSTRUCTIONS]
+- You MUST analyze the **Daewoon (Great Fortune)** flow provided in 'analysis.daewoon'.
+- Explain how the current Daewoon (based on user's age) interacts with the original Saju.
+- Discuss the **Annual Fortune (Sewoon)** for the current year (Gapjin Year or similar) relative to the Day Master (Ilgan).
+`;
+        }
+
+        instruction += `
 [WRITING_RULES]
 1. **Length Requirement**: You MUST write at least ${section.min_chars} characters for this section alone. Do not be brief. Expand on every point.
-2. **Style**: Use the Persona's voice. Do not sound like a generic AI. Be poetic, insightful, and "sage-like".
+2. **Style**: Use the Persona's voice (Cheongryong Dosa). Do not sound like a generic AI. Be poetic, insightful, and "sage-like".
 3. **Continuity**: Connect naturally with the [PREVIOUS_SECTIONS_CONTENT]. Do not repeat the same introductions.
 4. **Format**: Output purely the text for this section. Do NOT output JSON. Start with the section header: [${section.id}. ${section.title}]
 

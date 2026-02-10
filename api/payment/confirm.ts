@@ -88,26 +88,9 @@ export default async function handler(req: any, res: any) {
             profile.name,
             profile.birth_date_raw,
             profile.solar_lunar === 'lunar' ? 'lunar' : 'solar',
-            false, // Leap month - profile table doesn't seem to store boolean clearly? 
-            // Wait, guest_profiles has `solar_lunar`. It stores 'solar' or 'lunar'. 
-            // Leap month info? `guest_profiles` table definition (from search) shows `birth_date_raw`, `solar_lunar`, `birth_time_slot`.
-            // Does it store leap month flag?
-            // Checking table schema from earlier: `solar_lunar` is text.
-            // If the user selected leap month, where is it stored?
-            // Assuming `solar_lunar` might be 'lunar-leap' or handled during input.
-            // For now, assuming false if not explicit.
-            profile.birth_time_slot, // This contains text like "자시 (23:30~...)" or "야자" key?
-            // `birth_time_slot` in profile seems to be the Display String or Key.
-            // In `MasterDetail.tsx`, we save `birth_time_type` to profile?
-            // Let's assume `birth_time_slot` holds the key (e.g. "자", "축") or we need to map it.
-            // Actually, `computeSaju` expects the key (e.g. "조자", "축").
-            // I should parse `birth_time_slot` if it contains full text.
-            // Simple heuristic: Extract the first part before space?
-            profile.gender || 'male' // Profile usually has gender? Schema check: `guest_profiles` table has `name`, `birth_date_raw`... 
-            // Schema earlier: `name`, `birth_date_raw`, `birth_date_iso`, `solar_lunar`, `birth_time_slot`, `unknown_time`, `concern_text`.
-            // Missing `gender` column in `guest_profiles`! 
-            // Saju needs gender for Daewoon (Luck Cycle), but `computeSaju` (Ilju/Month/Time) technically doesn't depend on gender for the 4 pillars themselves (only Daewoon).
-            // However, `computeSaju` function signature requires it. I will pass 'male' as dummy if missing, as it doesn't affect the 4 pillars calculation in my `saju-calculator`.
+            false, // Leap month assumption
+            profile.birth_time_slot, 
+            profile.gender || 'female'
         );
 
         // Fetch Traits
@@ -155,7 +138,7 @@ export default async function handler(req: any, res: any) {
                 month_pillar: sajuResult.month_pillar || '',
                 day_pillar: sajuResult.day_pillar || sajuResult.ilju || '',
                 hour_pillar: sajuResult.hour_pillar || '',
-                gender: 'unknown',
+                gender: profile.gender || 'female',
                 lunar_solar: profile.solar_lunar,
                 leap_month: false,
                 time_bucket: sajuResult.input_hour_type

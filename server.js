@@ -32,6 +32,13 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL || ''
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
+// Test Supabase Connection
+supabase.from('sages').select('count', { count: 'exact', head: true })
+  .then(({ count, error }) => {
+    if (error) console.error("[Supabase] Connection test failed:", error.message);
+    else console.log("[Supabase] Connection test success. Sages count:", count);
+  });
+
 const app = express()
 
 // --- Middleware setup (MUST come before routes) ---
